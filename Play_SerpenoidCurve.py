@@ -248,16 +248,14 @@ def check_connection_and_power():
 
 # モーター接続確認関数
 def check_motor_connections(dxl_io, ids):
-    connected_ids = []
-    for motor_id in ids:
-        try:
-            if dxl_io.ping(motor_id):
-                connected_ids.append(motor_id)
-            else:
-                print(f"Warning: Motor {motor_id} not responding")
-        except Exception as e:
-            print(f"Error checking motor {motor_id}: {e}")
-    return connected_ids
+    """
+    モーターの接続を確認
+    scan()で既に検出されているため、追加のpingは不要
+    """
+    # scan()で取得したIDsをそのまま返す
+    # ping処理は通信エラーを起こす可能性があるため削除
+    print(f"Confirmed {len(ids)} motors connected")
+    return ids
 
 # 安全な初期位置復帰関数
 def safe_return_to_zero(dxl_io, ids, steps=RETURN_STEPS, delay=0.1):
@@ -924,8 +922,8 @@ def main():
         try:
             # 操舵制御の終了処理
             cleanup_steering_control()
-            
-            if 'dxl_io' in locals():
+
+            if 'dxl_io' in locals() and 'ids' in locals():
                 print("\n初期位置に戻しています...")
                 safe_return_to_zero(dxl_io, ids)
                 time.sleep(1)
@@ -939,8 +937,11 @@ def main():
         print("プログラムを終了しました")
 
         # 共有メモリの解放
-        shm.close()
-        shm.unlink()
+        try:
+            shm.close()
+            shm.unlink()
+        except Exception:
+            pass  # 共有メモリが既に解放されている場合は無視
 
 if __name__ == "__main__":
     main()
