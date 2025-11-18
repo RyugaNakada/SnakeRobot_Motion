@@ -14,6 +14,10 @@ TORQUE_MARGIN = 5         # トルク余裕値（%）
 RETURN_STEPS = 20         # 初期位置復帰ステップ数
 DELAY_TIME = 0.01        # 基本遅延時間
 
+# Dynamixel Protocol 2.0のアドレス定義
+GOAL_POSITION_ADDRESS = 116  # Goal Positionのアドレス（Protocol 2.0）
+GOAL_POSITION_LENGTH = 4     # Goal Positionのデータ長（4バイト）
+
 BIAS_RATE = 0.3            # バイアス変化率
 MAX_BIAS = 45.0              # バイアスの最大値
 BIAS_DECAY_RATE = 0.5     # バイアス減衰率
@@ -282,27 +286,65 @@ def safe_return_to_zero(dxl_io, ids, steps=RETURN_STEPS, delay=0.1):
         print(f"Error during safe return: {e}")
         raise
 
-# 安全な位置設定関数
+# 安全な位置設定関数（Sync Write対応版）
 def safe_set_goal_position(dxl_io, target_positions, retries=3, delay=0.1):
     """
-    モーターの目標位置を安全に設定し、現在角度も共有メモリに書き込む
+    Sync Writeを使ってモーターの目標位置を1回の通信で安全に設定
+    現在角度も共有メモリに書き込む
     """
     values = [*target_positions.values()]
-    
+
     # 指令値を共有メモリの前半に書き込む
     shared_buffer[:21] = values
-    
+
     # バイアスと捻転角度を書き込む
     shared_buffer[21] = int(current_bias)
     shared_buffer[22] = int(current_roll)
-    
-    for _ in range(retries):
+
+    # Sync Writeで一括送信
+    motor_ids = list(target_positions.keys())
+    positions = list(target_positions.values())
+
+    for attempt in range(retries):
         try:
-            dxl_io.set_goal_position(target_positions)
+            # 角度を位置値に変換（Dynamixel Protocol 2.0）
+            # pypotは角度（degree）を使用し、内部で位置値に変換
+            # 位置範囲: 0-4095 (0x000-0xFFF)
+            # 角度範囲: -150度～+150度
+            motor_values = []
+            for angle in positions:
+                # 角度を位置値に変換（-150度=0, 0度=2047.5, +150度=4095）
+                position_value = int((angle + 150.0) * 4095.0 / 300.0)
+                # 範囲制限
+                position_value = max(0, min(4095, position_value))
+                motor_values.append(position_value)
+
+            # Sync Writeで一括送信（1回の通信で全モーターに送信）
+            # データ形式: [[motor1_value], [motor2_value], ...]
+            data = [[value] for value in motor_values]
+            dxl_io._DxlIO__controller.sync_write(
+                motor_ids,
+                data,
+                GOAL_POSITION_ADDRESS,
+                GOAL_POSITION_LENGTH
+            )
             return True
+
+        except AttributeError:
+            # sync_writeが使えない場合は従来の方法にフォールバック
+            if attempt == 0:
+                print("Warning: Sync Write not available, using standard method")
+            try:
+                dxl_io.set_goal_position(target_positions)
+                return True
+            except Exception as e:
+                print(f"Position setting error: {e}")
+                time.sleep(delay)
+
         except Exception as e:
-            print(f"Position setting error: {e}")
+            print(f"Sync write error (attempt {attempt+1}/{retries}): {e}")
             time.sleep(delay)
+
     print("Failed to set position after multiple attempts")
     return False
 
